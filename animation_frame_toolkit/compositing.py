@@ -3,6 +3,7 @@ animation_frame_toolkit.compositing
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 Composición final: tritono + alpha → RGBA listo para exportar.
 """
+
 from __future__ import annotations
 
 from typing import Tuple

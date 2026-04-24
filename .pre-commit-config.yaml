@@ -1,3 +1,4 @@
+exclude: '^(?:\\.venv(?:[-_].*)?|\\.venv-tools|\\.venvprincipal|venv|\.venv/).*'
 repos:
   - repo: local
     hooks:
@@ -27,6 +28,6 @@ repos:
 
       - id: json-validate
         name: json-validate
-        entry: python -m json.tool
+        entry: bash -c 'for f; do python -m json.tool "${f}" >/dev/null; done'
         language: system
         files: "\\.json$"

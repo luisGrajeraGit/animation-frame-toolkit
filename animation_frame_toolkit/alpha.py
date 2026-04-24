@@ -9,6 +9,7 @@ Estrategia v8 (dual-path):
      para recuperar zonas de patas/contorno no cerrado.
   Ambas vías se combinan con OR restringido a la zona del personaje.
 """
+
 from __future__ import annotations
 
 import cv2
@@ -16,10 +17,10 @@ import numpy as np
 
 from .utils import area_filter, fill_holes
 
-
 # ------------------------------------------------------------------ #
 # Funciones internas                                                   #
 # ------------------------------------------------------------------ #
+
 
 def _flood_fill_alpha(
     gray: np.ndarray,
@@ -105,6 +106,7 @@ def _remove_white_border_leakage(
 # API pública                                                          #
 # ------------------------------------------------------------------ #
 
+
 def compute_alpha(
     gray: np.ndarray,
     line_barrier: np.ndarray,
@@ -131,9 +133,7 @@ def compute_alpha(
     if alpha_close > 0:
         dark_sil = _dark_silhouette_alpha(gray, alpha_close, dark_thresh)
         margin = alpha_close + 20
-        se_margin = cv2.getStructuringElement(
-            cv2.MORPH_ELLIPSE, (2 * margin + 1, 2 * margin + 1)
-        )
+        se_margin = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * margin + 1, 2 * margin + 1))
         fg_expanded = cv2.dilate(fg, se_margin, iterations=1)
         dark_sil = cv2.bitwise_and(dark_sil, fg_expanded)
         fg = cv2.bitwise_or(fg, dark_sil)
@@ -148,9 +148,7 @@ def compute_alpha(
 
     # Erosión suave para afinar bordes
     if shrink > 0:
-        se = cv2.getStructuringElement(
-            cv2.MORPH_ELLIPSE, (2 * shrink + 1, 2 * shrink + 1)
-        )
+        se = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * shrink + 1, 2 * shrink + 1))
         fg = cv2.erode(fg, se, iterations=1)
         fg = fill_holes(fg)
 

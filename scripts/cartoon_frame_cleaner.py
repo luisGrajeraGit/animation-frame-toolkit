@@ -35,6 +35,7 @@ Salida: PNG RGBA
 
 import argparse
 from pathlib import Path
+
 import cv2
 import numpy as np
 
@@ -48,9 +49,7 @@ def ensure_gray(img):
 
 
 def area_filter(mask_u8, min_area=16, keep_larger=True):
-    num, labels, stats, _ = cv2.connectedComponentsWithStats(
-        (mask_u8 > 0).astype(np.uint8), 8
-    )
+    num, labels, stats, _ = cv2.connectedComponentsWithStats((mask_u8 > 0).astype(np.uint8), 8)
     out = np.zeros_like(mask_u8)
     for i in range(1, num):
         area = stats[i, cv2.CC_STAT_AREA]
@@ -73,12 +72,14 @@ def fill_holes(mask_u8):
 def estimate_background(gray):
     h, w = gray.shape
     b = max(8, min(h, w) // 40)
-    border = np.concatenate([
-        gray[:b, :].ravel(),
-        gray[-b:, :].ravel(),
-        gray[:, :b].ravel(),
-        gray[:, -b:].ravel(),
-    ])
+    border = np.concatenate(
+        [
+            gray[:b, :].ravel(),
+            gray[-b:, :].ravel(),
+            gray[:, :b].ravel(),
+            gray[:, -b:].ravel(),
+        ]
+    )
     return (
         float(np.percentile(border, 50)),
         float(np.percentile(border, 90)),
@@ -95,12 +96,8 @@ def normalize_background(gray):
 
 
 def build_line_score(gray, local_radius=9):
-    blur = cv2.GaussianBlur(
-        gray, (0, 0), sigmaX=max(local_radius / 2.0, 1.0)
-    )
-    local_dark = np.clip(
-        blur.astype(np.int16) - gray.astype(np.int16), 0, 255
-    ).astype(np.uint8)
+    blur = cv2.GaussianBlur(gray, (0, 0), sigmaX=max(local_radius / 2.0, 1.0))
+    local_dark = np.clip(blur.astype(np.int16) - gray.astype(np.int16), 0, 255).astype(np.uint8)
     bh1 = cv2.morphologyEx(
         gray,
         cv2.MORPH_BLACKHAT,
@@ -117,20 +114,12 @@ def build_line_score(gray, local_radius=9):
 
 
 def initial_line_mask0(gray, max_line_width=5, line_thresh=16, abs_black=24):
-    score, local_dark, bh1, bh2 = build_line_score(
-        gray, local_radius=max(5, max_line_width + 2)
-    )
+    score, local_dark, bh1, bh2 = build_line_score(gray, local_radius=max(5, max_line_width + 2))
     vals = score[gray < 245]
-    thr = (
-        max(line_thresh, int(np.percentile(vals, 80)))
-        if vals.size
-        else line_thresh
-    )
+    thr = max(line_thresh, int(np.percentile(vals, 80))) if vals.size else line_thresh
 
     mask_local = (score >= thr).astype(np.uint8) * 255
-    mask_abs = (
-        (gray <= abs_black) & (local_dark >= max(4, line_thresh // 2))
-    ).astype(np.uint8) * 255
+    mask_abs = ((gray <= abs_black) & (local_dark >= max(4, line_thresh // 2))).astype(np.uint8) * 255
     mask0 = cv2.bitwise_or(mask_local, mask_abs)
     mask0 = cv2.morphologyEx(
         mask0,
@@ -145,6 +134,7 @@ def initial_line_mask0(gray, max_line_width=5, line_thresh=16, abs_black=24):
 # ---------------------------------------------------------------------------
 # Alpha computation — v8: flood-fill + dark-silhouette recovery
 # ---------------------------------------------------------------------------
+
 
 def _flood_fill_alpha(gray, barrier, bg_lo, bg_hi):
     """Flood-fill desde el borde para detectar fondo definitivo."""
@@ -209,13 +199,6 @@ def _remove_white_border_leakage(fg, gray, bg_lo=245):
 
     # Semillas del exterior: borde de la imagen donde el alpha es 0
     # (fondo real)
-    ext_seed_rows = []
-    ext_seed_cols = []
-    # Borde superior
-    for x in range(w):
-        if fg[0, x] == 0 and bright_inside[0, x] == 0:
-            pass  # ya es exterior, no necesita semilla en bright_inside
-        # Buscamos píxeles bright_inside adyacentes al exterior
     # Mejor: dilatamos el exterior y cruzamos con bright_inside
     exterior = (fg == 0).astype(np.uint8) * 255
     ext_dil = cv2.dilate(
@@ -268,9 +251,7 @@ def compute_alpha_from_gray(
         # Restringir la silueta oscura a una zona próxima al alpha del
         # flood-fill (evita incluir ruido lejos del personaje)
         margin = alpha_close + 20
-        se_margin = cv2.getStructuringElement(
-            cv2.MORPH_ELLIPSE, (2 * margin + 1, 2 * margin + 1)
-        )
+        se_margin = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * margin + 1, 2 * margin + 1))
         fg_expanded = cv2.dilate(fg_flood, se_margin, iterations=1)
         dark_sil_restricted = cv2.bitwise_and(dark_sil, fg_expanded)
 
@@ -291,9 +272,7 @@ def compute_alpha_from_gray(
     if shrink > 0:
         fg = cv2.erode(
             fg,
-            cv2.getStructuringElement(
-                cv2.MORPH_ELLIPSE, (2 * shrink + 1, 2 * shrink + 1)
-            ),
+            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * shrink + 1, 2 * shrink + 1)),
             iterations=1,
         )
         fg = fill_holes(fg)
@@ -338,9 +317,7 @@ def provisional_fill_quantization(clean_gray, alpha_mask, dark_gray=72):
     return out, int(thr)
 
 
-def reinforce_mask0(
-    mask0, gray, local_dark, alpha_mask, fill_map, max_line_width=5, abs_black=24
-):
+def reinforce_mask0(mask0, gray, local_dark, alpha_mask, fill_map, max_line_width=5, abs_black=24):
     """
     Usa mask0 casi completo, pero con reglas suaves:
     - conservar todo lo que toque o roce el personaje
@@ -348,9 +325,7 @@ def reinforce_mask0(
     - conservar componentes oscuros rodeados de blanco (ojos, nariz, boca)
     - descartar solo basura muy pequeña lejos del personaje
     """
-    num, labels, stats, _ = cv2.connectedComponentsWithStats(
-        (mask0 > 0).astype(np.uint8), 8
-    )
+    num, labels, stats, _ = cv2.connectedComponentsWithStats((mask0 > 0).astype(np.uint8), 8)
     out = np.zeros_like(mask0)
 
     alpha_dil = cv2.dilate(
@@ -390,20 +365,14 @@ def reinforce_mask0(
         ring = np.clip(ring - comp, 0, 1).astype(np.uint8)
         ring = np.logical_and(ring > 0, alpha_dil > 0)
         ring_fill_vals = fill_map[ring]
-        white_ratio = (
-            float(np.mean(ring_fill_vals == 255)) if ring_fill_vals.size else 0.0
-        )
+        white_ratio = float(np.mean(ring_fill_vals == 255)) if ring_fill_vals.size else 0.0
 
         keep = False
 
         if touches_alpha and inside_mean <= 70:
             keep = True
 
-        if (
-            touches_alpha
-            and max_half_width <= (max_line_width / 2.0 + 0.8)
-            and (aspect >= 1.8 or ld_mean >= 6)
-        ):
+        if touches_alpha and max_half_width <= (max_line_width / 2.0 + 0.8) and (aspect >= 1.8 or ld_mean >= 6):
             keep = True
 
         if touches_alpha and white_ratio >= 0.60 and inside_mean <= 80:
@@ -433,12 +402,8 @@ def silhouette_outline(alpha_mask, outline_thickness=2):
 
 
 def remove_tiny_white_specks(tritone, alpha_mask, dark_gray=72, min_area=8):
-    inside_white = np.logical_and(
-        alpha_mask > 0, tritone == 255
-    ).astype(np.uint8) * 255
-    num, labels, stats, _ = cv2.connectedComponentsWithStats(
-        (inside_white > 0).astype(np.uint8), 8
-    )
+    inside_white = np.logical_and(alpha_mask > 0, tritone == 255).astype(np.uint8) * 255
+    num, labels, stats, _ = cv2.connectedComponentsWithStats((inside_white > 0).astype(np.uint8), 8)
     out = tritone.copy()
     for i in range(1, num):
         area = int(stats[i, cv2.CC_STAT_AREA])
@@ -449,9 +414,7 @@ def remove_tiny_white_specks(tritone, alpha_mask, dark_gray=72, min_area=8):
 
 def remove_tiny_black_specks(tritone, alpha_mask, dark_gray=72, min_area=3):
     black = np.logical_and(alpha_mask > 0, tritone == 0).astype(np.uint8) * 255
-    num, labels, stats, _ = cv2.connectedComponentsWithStats(
-        (black > 0).astype(np.uint8), 8
-    )
+    num, labels, stats, _ = cv2.connectedComponentsWithStats((black > 0).astype(np.uint8), 8)
     out = tritone.copy()
     for i in range(1, num):
         area = int(stats[i, cv2.CC_STAT_AREA])
@@ -461,9 +424,7 @@ def remove_tiny_black_specks(tritone, alpha_mask, dark_gray=72, min_area=3):
 
 
 def quantize_with_ink(clean_gray, alpha_mask, ink_mask, dark_gray=72):
-    fill_map, thr = provisional_fill_quantization(
-        clean_gray, alpha_mask, dark_gray=dark_gray
-    )
+    fill_map, thr = provisional_fill_quantization(clean_gray, alpha_mask, dark_gray=dark_gray)
     out = np.full_like(clean_gray, 255)
     out[alpha_mask > 0] = fill_map[alpha_mask > 0]
     out[np.logical_and(alpha_mask > 0, ink_mask > 0)] = 0
@@ -541,12 +502,8 @@ def process_one(
     ink_final = cv2.bitwise_and(ink_final, alpha)
 
     tritone, _, _ = quantize_with_ink(clean, alpha, ink_final, dark_gray=dark_gray)
-    tritone = remove_tiny_white_specks(
-        tritone, alpha, dark_gray=dark_gray, min_area=white_speck_area
-    )
-    tritone = remove_tiny_black_specks(
-        tritone, alpha, dark_gray=dark_gray, min_area=black_speck_area
-    )
+    tritone = remove_tiny_white_specks(tritone, alpha, dark_gray=dark_gray, min_area=white_speck_area)
+    tritone = remove_tiny_black_specks(tritone, alpha, dark_gray=dark_gray, min_area=black_speck_area)
 
     rgba = rgba_from_quantized(tritone, alpha)
     cv2.imwrite(str(output_path), rgba)
@@ -580,15 +537,12 @@ def iter_inputs(input_path, glob_pat):
 
 
 def main():
-    ap = argparse.ArgumentParser(
-        description="Limpia fotogramas de animación 2D (gato B/N). v8."
-    )
+    ap = argparse.ArgumentParser(description="Limpia fotogramas de animación 2D (gato B/N). v8.")
     ap.add_argument("input", help="Imagen de entrada o carpeta")
     ap.add_argument("output", help="Imagen de salida o carpeta")
     ap.add_argument("--glob", default="*.png")
     ap.add_argument("--debug-dir", default=None)
-    ap.add_argument("--dark-gray", type=int, default=25,
-                    help="Valor de gris oscuro para el cuerpo del gato")
+    ap.add_argument("--dark-gray", type=int, default=25, help="Valor de gris oscuro para el cuerpo del gato")
     ap.add_argument("--max-line-width", type=int, default=5)
     ap.add_argument("--line-thresh", type=int, default=16)
     ap.add_argument("--abs-black", type=int, default=24)
@@ -606,8 +560,7 @@ def main():
         "--dark-thresh",
         type=int,
         default=180,
-        help="Umbral de luminosidad para considerar un píxel 'oscuro' "
-             "en la silueta de recuperación",
+        help="Umbral de luminosidad para considerar un píxel 'oscuro' " "en la silueta de recuperación",
     )
     ap.add_argument("--outline-thickness", type=int, default=2)
     ap.add_argument("--white-speck-area", type=int, default=8)

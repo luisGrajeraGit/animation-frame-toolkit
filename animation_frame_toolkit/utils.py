@@ -3,6 +3,7 @@ animation_frame_toolkit.utils
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 Utilidades morfológicas de bajo nivel compartidas por varios módulos.
 """
+
 from __future__ import annotations
 
 import cv2
@@ -15,9 +16,7 @@ def area_filter(
     keep_larger: bool = True,
 ) -> np.ndarray:
     """Filtra componentes conectadas por área mínima."""
-    num, labels, stats, _ = cv2.connectedComponentsWithStats(
-        (mask_u8 > 0).astype(np.uint8), 8
-    )
+    num, labels, stats, _ = cv2.connectedComponentsWithStats((mask_u8 > 0).astype(np.uint8), 8)
     out = np.zeros_like(mask_u8)
     for i in range(1, num):
         area = stats[i, cv2.CC_STAT_AREA]

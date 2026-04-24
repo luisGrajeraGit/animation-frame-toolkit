@@ -16,7 +16,7 @@ Ejemplos de uso::
     python scripts/process_frames.py input.png output.png
 
     # Carpeta completa, 4 hilos
-    python scripts/process_frames.py media/Gato\ 01/EXPORT_frames/ outputs/ --workers 4
+    python scripts/process_frames.py "media/Gato 01/EXPORT_frames/" outputs/ --workers 4
 
     # Usar preset JSON + override puntual
     python scripts/process_frames.py frames/ out/ --config presets/gato.json --dark-gray 30
@@ -27,22 +27,23 @@ Ejemplos de uso::
     # Guardar config activa en JSON para reutilizar
     python scripts/process_frames.py frames/ out/ --save-config my_preset.json
 """
+
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from pathlib import Path
 
 # Permite ejecutar directamente sin instalar el paquete
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from animation_frame_toolkit.batch import process_batch
-from animation_frame_toolkit.config import ProcessConfig
-from animation_frame_toolkit.pipeline import iter_inputs, process_frame
+from animation_frame_toolkit.batch import process_batch  # noqa: E402
+from animation_frame_toolkit.config import ProcessConfig  # noqa: E402
+from animation_frame_toolkit.pipeline import iter_inputs, process_frame  # noqa: E402
 
 try:
     from tqdm import tqdm
+
     _HAS_TQDM = True
 except ImportError:
     _HAS_TQDM = False
@@ -52,6 +53,7 @@ except ImportError:
 # Parseo de argumentos                                                 #
 # ------------------------------------------------------------------ #
 
+
 def _build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
         prog="process_frames",
@@ -59,39 +61,36 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
         epilog=__doc__,
     )
-    ap.add_argument("input",  help="Imagen de entrada o carpeta con frames")
+    ap.add_argument("input", help="Imagen de entrada o carpeta con frames")
     ap.add_argument("output", help="Imagen de salida o carpeta de destino")
 
     io_grp = ap.add_argument_group("opciones de E/S")
-    io_grp.add_argument("--glob",       default="*.png",
-                        help="Patrón glob al leer carpetas")
-    io_grp.add_argument("--debug-dir",  default=None,  metavar="DIR",
-                        help="Guarda imágenes intermedias de debug aquí")
-    io_grp.add_argument("--workers",    type=int, default=1,
-                        help="Nº de procesos paralelos (1 = secuencial)")
+    io_grp.add_argument("--glob", default="*.png", help="Patrón glob al leer carpetas")
+    io_grp.add_argument("--debug-dir", default=None, metavar="DIR", help="Guarda imágenes intermedias de debug aquí")
+    io_grp.add_argument("--workers", type=int, default=1, help="Nº de procesos paralelos (1 = secuencial)")
 
     cfg_grp = ap.add_argument_group("configuración")
-    cfg_grp.add_argument("--config",      default=None, metavar="FILE",
-                         help="JSON con valores de ProcessConfig")
-    cfg_grp.add_argument("--save-config", default=None, metavar="FILE",
-                         help="Guarda la config resultante en un fichero JSON")
+    cfg_grp.add_argument("--config", default=None, metavar="FILE", help="JSON con valores de ProcessConfig")
+    cfg_grp.add_argument(
+        "--save-config", default=None, metavar="FILE", help="Guarda la config resultante en un fichero JSON"
+    )
 
     param_grp = ap.add_argument_group("parámetros de procesado (anulan el JSON)")
-    param_grp.add_argument("--dark-gray",          type=int, default=None)
-    param_grp.add_argument("--max-line-width",      type=int, default=None)
-    param_grp.add_argument("--line-thresh",         type=int, default=None)
-    param_grp.add_argument("--abs-black",           type=int, default=None)
-    param_grp.add_argument("--body-smooth",         type=int, default=None)
-    param_grp.add_argument("--bg-lo",               type=int, default=None)
-    param_grp.add_argument("--bg-hi",               type=int, default=None)
-    param_grp.add_argument("--alpha-shrink",        type=int, default=None)
-    param_grp.add_argument("--alpha-close",         type=int, default=None,
-                           help="Radio del cierre morfológico para patas (0=desactivar)")
-    param_grp.add_argument("--dark-thresh",         type=int, default=None,
-                           help="Umbral de luminosidad para silueta oscura")
-    param_grp.add_argument("--outline-thickness",   type=int, default=None)
-    param_grp.add_argument("--white-speck-area",    type=int, default=None)
-    param_grp.add_argument("--black-speck-area",    type=int, default=None)
+    param_grp.add_argument("--dark-gray", type=int, default=None)
+    param_grp.add_argument("--max-line-width", type=int, default=None)
+    param_grp.add_argument("--line-thresh", type=int, default=None)
+    param_grp.add_argument("--abs-black", type=int, default=None)
+    param_grp.add_argument("--body-smooth", type=int, default=None)
+    param_grp.add_argument("--bg-lo", type=int, default=None)
+    param_grp.add_argument("--bg-hi", type=int, default=None)
+    param_grp.add_argument("--alpha-shrink", type=int, default=None)
+    param_grp.add_argument(
+        "--alpha-close", type=int, default=None, help="Radio del cierre morfológico para patas (0=desactivar)"
+    )
+    param_grp.add_argument("--dark-thresh", type=int, default=None, help="Umbral de luminosidad para silueta oscura")
+    param_grp.add_argument("--outline-thickness", type=int, default=None)
+    param_grp.add_argument("--white-speck-area", type=int, default=None)
+    param_grp.add_argument("--black-speck-area", type=int, default=None)
     return ap
 
 
@@ -103,16 +102,16 @@ def _build_config(args: argparse.Namespace) -> ProcessConfig:
         config = ProcessConfig.from_json(args.config)
 
     cli_overrides = {
-        "dark_gray":        args.dark_gray,
-        "max_line_width":   args.max_line_width,
-        "line_thresh":      args.line_thresh,
-        "abs_black":        args.abs_black,
-        "body_smooth":      args.body_smooth,
-        "bg_lo":            args.bg_lo,
-        "bg_hi":            args.bg_hi,
-        "alpha_shrink":     args.alpha_shrink,
-        "alpha_close":      args.alpha_close,
-        "dark_thresh":      args.dark_thresh,
+        "dark_gray": args.dark_gray,
+        "max_line_width": args.max_line_width,
+        "line_thresh": args.line_thresh,
+        "abs_black": args.abs_black,
+        "body_smooth": args.body_smooth,
+        "bg_lo": args.bg_lo,
+        "bg_hi": args.bg_hi,
+        "alpha_shrink": args.alpha_shrink,
+        "alpha_close": args.alpha_close,
+        "dark_thresh": args.dark_thresh,
         "outline_thickness": args.outline_thickness,
         "white_speck_area": args.white_speck_area,
         "black_speck_area": args.black_speck_area,
@@ -127,6 +126,7 @@ def _build_config(args: argparse.Namespace) -> ProcessConfig:
 # ------------------------------------------------------------------ #
 # Punto de entrada                                                     #
 # ------------------------------------------------------------------ #
+
 
 def main(argv: list[str] | None = None) -> None:
     ap = _build_parser()
@@ -160,15 +160,21 @@ def main(argv: list[str] | None = None) -> None:
 
     if _HAS_TQDM:
         bar = tqdm(total=total, unit="frame", dynamic_ncols=True)
-        callback = lambda p: bar.update(1)
+
+        def callback(p: Path) -> None:
+            bar.update(1)
+
     else:
         done = [0]
+
         def callback(p: Path) -> None:
             done[0] += 1
             print(f"  [{done[0]:>4}/{total}] {p.name}")
 
     process_batch(
-        inputs, out_path, config,
+        inputs,
+        out_path,
+        config,
         workers=args.workers,
         debug_dir=debug_dir,
         on_progress=callback,

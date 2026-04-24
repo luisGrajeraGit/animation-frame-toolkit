@@ -4,6 +4,7 @@ animation_frame_toolkit.config
 Dataclass centralizado con todos los parámetros de procesado.
 Permite cargar/guardar configuraciones desde/hacia JSON.
 """
+
 from __future__ import annotations
 
 import dataclasses

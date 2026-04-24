@@ -1,4 +1,5 @@
 """python -m animation_frame_toolkit  →  delega al CLI unificado process_frames."""
+
 import sys
 from pathlib import Path
 

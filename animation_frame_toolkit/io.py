@@ -3,6 +3,7 @@ animation_frame_toolkit.io
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 Lectura y escritura de imágenes. Centraliza el acceso a disco.
 """
+
 from __future__ import annotations
 
 from pathlib import Path

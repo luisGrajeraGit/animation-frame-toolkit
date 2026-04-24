@@ -9,9 +9,9 @@ API pública principal::
 
 __version__ = "0.2.0"
 
+from .batch import process_batch
 from .config import ProcessConfig
 from .pipeline import iter_inputs, process_frame
-from .batch import process_batch
 
 __all__ = [
     "ProcessConfig",

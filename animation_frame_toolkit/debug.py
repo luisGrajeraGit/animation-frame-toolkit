@@ -3,6 +3,7 @@ animation_frame_toolkit.debug
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 Guardado de fotogramas intermedios para diagnóstico y ajuste de parámetros.
 """
+
 from __future__ import annotations
 
 from pathlib import Path

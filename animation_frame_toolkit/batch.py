@@ -11,6 +11,7 @@ Uso típico::
     inputs = iter_inputs("media/Gato 01/EXPORT_frames")
     process_batch(inputs, "media/Gato 01/EXPORT_frames_alpha", workers=4)
 """
+
 from __future__ import annotations
 
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -20,10 +21,10 @@ from typing import Callable, List, Optional
 from .config import ProcessConfig
 from .pipeline import process_frame
 
-
 # ------------------------------------------------------------------ #
 # Worker (debe estar en top-level para ser picklable en multiproceso)  #
 # ------------------------------------------------------------------ #
+
 
 def _worker(args: tuple) -> Path:
     inp, out, config, debug_dir = args
@@ -34,6 +35,7 @@ def _worker(args: tuple) -> Path:
 # ------------------------------------------------------------------ #
 # API pública                                                          #
 # ------------------------------------------------------------------ #
+
 
 def process_batch(
     inputs: List["str | Path"],
@@ -61,10 +63,7 @@ def process_batch(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    tasks = [
-        (Path(inp), output_dir / (Path(inp).stem + ".png"), config, debug_dir)
-        for inp in inputs
-    ]
+    tasks = [(Path(inp), output_dir / (Path(inp).stem + ".png"), config, debug_dir) for inp in inputs]
 
     processed: List[Path] = []
 

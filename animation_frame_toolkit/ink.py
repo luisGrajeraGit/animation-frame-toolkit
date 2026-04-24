@@ -3,6 +3,7 @@ animation_frame_toolkit.ink
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 Refuerzo de la máscara de tinta y generación del contorno de silueta.
 """
+
 from __future__ import annotations
 
 import cv2
@@ -24,9 +25,7 @@ def reinforce_line_mask(
     - Conserva componentes oscuros rodeados de blanco (ojos, nariz, etc.).
     - Descarta solo ruido pequeño lejos del personaje.
     """
-    num, labels, stats, _ = cv2.connectedComponentsWithStats(
-        (mask0 > 0).astype(np.uint8), 8
-    )
+    num, labels, stats, _ = cv2.connectedComponentsWithStats((mask0 > 0).astype(np.uint8), 8)
     out = np.zeros_like(mask0)
     alpha_dil = cv2.dilate(
         alpha_mask,
@@ -65,11 +64,7 @@ def reinforce_line_mask(
         keep = False
         if touches_alpha and inside_mean <= 70:
             keep = True
-        if (
-            touches_alpha
-            and max_half_width <= (max_line_width / 2.0 + 0.8)
-            and (aspect >= 1.8 or ld_mean >= 6)
-        ):
+        if touches_alpha and max_half_width <= (max_line_width / 2.0 + 0.8) and (aspect >= 1.8 or ld_mean >= 6):
             keep = True
         if touches_alpha and white_ratio >= 0.60 and inside_mean <= 80:
             keep = True
@@ -106,9 +101,7 @@ def remove_white_specks(
 ) -> np.ndarray:
     """Rellena pequeñas manchas blancas dentro del personaje."""
     inside_white = np.logical_and(alpha_mask > 0, tritone == 255).astype(np.uint8) * 255
-    num, labels, stats, _ = cv2.connectedComponentsWithStats(
-        (inside_white > 0).astype(np.uint8), 8
-    )
+    num, labels, stats, _ = cv2.connectedComponentsWithStats((inside_white > 0).astype(np.uint8), 8)
     out = tritone.copy()
     for i in range(1, num):
         if int(stats[i, cv2.CC_STAT_AREA]) < min_area:
@@ -124,9 +117,7 @@ def remove_black_specks(
 ) -> np.ndarray:
     """Elimina pequeñas manchas negras sueltas dentro del personaje."""
     black = np.logical_and(alpha_mask > 0, tritone == 0).astype(np.uint8) * 255
-    num, labels, stats, _ = cv2.connectedComponentsWithStats(
-        (black > 0).astype(np.uint8), 8
-    )
+    num, labels, stats, _ = cv2.connectedComponentsWithStats((black > 0).astype(np.uint8), 8)
     out = tritone.copy()
     for i in range(1, num):
         if int(stats[i, cv2.CC_STAT_AREA]) < min_area:

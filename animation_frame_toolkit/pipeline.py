@@ -4,6 +4,7 @@ animation_frame_toolkit.pipeline
 Orquestador de un fotograma: llama a cada módulo en orden y produce el RGBA final.
 Este es el único lugar donde los módulos se conocen entre sí.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -57,7 +58,8 @@ def process_frame(
 
     # 3. Cálculo del canal alpha
     alpha = compute_alpha(
-        norm, mask0,
+        norm,
+        mask0,
         bg_lo=config.bg_lo,
         bg_hi=config.bg_hi,
         shrink=config.alpha_shrink,
@@ -71,25 +73,23 @@ def process_frame(
 
     # 5. Refuerzo de máscara de tinta
     ink_core = reinforce_line_mask(
-        mask0, norm, local_dark, alpha, fill_map,
+        mask0,
+        norm,
+        local_dark,
+        alpha,
+        fill_map,
         max_line_width=config.max_line_width,
         abs_black=config.abs_black,
     )
 
     # 6. Contorno de silueta
     outer_outline = silhouette_outline(alpha, outline_thickness=config.outline_thickness)
-    ink_final = cv2.bitwise_and(
-        cv2.bitwise_or(ink_core, outer_outline), alpha
-    )
+    ink_final = cv2.bitwise_and(cv2.bitwise_or(ink_core, outer_outline), alpha)
 
     # 7. Composición final
     tritone, _, _ = build_tritone(clean, alpha, ink_final, dark_gray=config.dark_gray)
-    tritone = remove_white_specks(
-        tritone, alpha, dark_gray=config.dark_gray, min_area=config.white_speck_area
-    )
-    tritone = remove_black_specks(
-        tritone, alpha, dark_gray=config.dark_gray, min_area=config.black_speck_area
-    )
+    tritone = remove_white_specks(tritone, alpha, dark_gray=config.dark_gray, min_area=config.white_speck_area)
+    tritone = remove_black_specks(tritone, alpha, dark_gray=config.dark_gray, min_area=config.black_speck_area)
     rgba = to_rgba(tritone, alpha)
     write_image(Path(output_path), rgba)
 

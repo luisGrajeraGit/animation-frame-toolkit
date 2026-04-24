@@ -3,6 +3,7 @@ animation_frame_toolkit.fill
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 Limpieza y cuantización de los rellenos interiores del personaje.
 """
+
 from __future__ import annotations
 
 from typing import Tuple
@@ -52,7 +53,8 @@ def quantize_fills(
         return out, 127
     thr, _ = cv2.threshold(
         vals.reshape(-1, 1).astype(np.uint8),
-        0, 255,
+        0,
+        255,
         cv2.THRESH_BINARY + cv2.THRESH_OTSU,
     )
     out[np.logical_and(alpha_mask > 0, clean_gray <= thr)] = dark_gray

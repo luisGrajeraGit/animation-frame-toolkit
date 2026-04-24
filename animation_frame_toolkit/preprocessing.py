@@ -3,6 +3,7 @@ animation_frame_toolkit.preprocessing
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 Normalización de imagen antes de la extracción del personaje.
 """
+
 from __future__ import annotations
 
 from typing import Tuple
@@ -28,12 +29,14 @@ def estimate_background(gray: np.ndarray) -> Tuple[float, float, float]:
     """
     h, w = gray.shape
     b = max(8, min(h, w) // 40)
-    border = np.concatenate([
-        gray[:b, :].ravel(),
-        gray[-b:, :].ravel(),
-        gray[:, :b].ravel(),
-        gray[:, -b:].ravel(),
-    ])
+    border = np.concatenate(
+        [
+            gray[:b, :].ravel(),
+            gray[-b:, :].ravel(),
+            gray[:, :b].ravel(),
+            gray[:, -b:].ravel(),
+        ]
+    )
     return (
         float(np.percentile(border, 50)),
         float(np.percentile(border, 90)),
