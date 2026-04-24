@@ -1,5 +1,7 @@
 __pycache__/
 *.pyc
+.cache/
+media/
 .venv/
 .venvprincipal/
 .env
