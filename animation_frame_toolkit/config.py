@@ -45,6 +45,12 @@ class ProcessConfig:
     white_speck_area: int = 8
     black_speck_area: int = 3
 
+    # --- Defringe (anti-halo y limpieza de bordes blancos) ---
+    defringe_width: int = 2
+    """Anchura en píxeles de la corona exterior del alpha a examinar para defringe."""
+    defringe_thresh: int = 220
+    """Umbral de luminosidad: píxeles frontera con gris >= este valor se eliminan del alpha."""
+
     # ------------------------------------------------------------------ #
     # Serialización                                                        #
     # ------------------------------------------------------------------ #

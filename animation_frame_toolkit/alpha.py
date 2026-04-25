@@ -79,6 +79,10 @@ def _remove_white_border_leakage(
     """Elimina del alpha los píxeles claros conectados al fondo exterior.
 
     Preserva las áreas blancas interiores cerradas (cara, ojos, etc.).
+    Semillas dobles:
+      1. Píxeles brillantes dentro del alpha adyacentes al exterior del alpha.
+      2. Píxeles brillantes dentro del alpha en el BORDE DE LA IMAGEN
+         (cubre casos en que el personaje sale por el encuadre, p.ej. patas).
     """
     bright_inside = np.logical_and(fg > 0, gray >= bg_lo).astype(np.uint8) * 255
 
@@ -86,20 +90,59 @@ def _remove_white_border_leakage(
     flood = bright_inside.copy()
     ffmask = np.zeros((h + 2, w + 2), np.uint8)
 
+    # --- Semillas desde exterior del alpha (comportamiento original) ---
     exterior = (fg == 0).astype(np.uint8) * 255
     ext_dil = cv2.dilate(
         exterior,
         cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)),
         iterations=1,
     )
-    seeds = cv2.bitwise_and(bright_inside, ext_dil)
-    ys, xs = np.where(seeds > 0)
+    seeds_alpha = cv2.bitwise_and(bright_inside, ext_dil)
+
+    # --- Semillas desde el BORDE DE LA IMAGEN (nuevo) ---
+    # Cualquier píxel brillante del alpha que toque el frame edge = background.
+    border_mask = np.zeros((h, w), np.uint8)
+    border_mask[0, :] = 255
+    border_mask[-1, :] = 255
+    border_mask[:, 0] = 255
+    border_mask[:, -1] = 255
+    seeds_border = cv2.bitwise_and(bright_inside, border_mask)
+
+    all_seeds = cv2.bitwise_or(seeds_alpha, seeds_border)
+    ys, xs = np.where(all_seeds > 0)
     for y, x in zip(ys, xs):
         if flood[y, x] == 255:
             cv2.floodFill(flood, ffmask, (int(x), int(y)), 128)
 
     leaked = (flood == 128).astype(np.uint8) * 255
     return cv2.bitwise_and(fg, cv2.bitwise_not(leaked))
+
+
+def _defringe_boundary(
+    fg: np.ndarray,
+    gray: np.ndarray,
+    ring_width: int = 2,
+    bright_thresh: int = 220,
+) -> np.ndarray:
+    """Elimina del alpha los píxeles muy brillantes en el ring exterior del alpha.
+
+    Corrige el halo blanco que aparece al componer sobre fondos de color:
+    el alpha binario se extiende 1-2 px más allá de la línea de tinta y esos
+    píxeles frontera tienen color de fondo blanco en el tritono.
+
+    Solo actúa sobre la corona exterior (ring_width px) del alpha, por lo que
+    las áreas blancas interiores cerradas (cara, ojos) quedan intactas.
+    """
+    if ring_width <= 0:
+        return fg
+    se = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * ring_width + 1, 2 * ring_width + 1))
+    eroded = cv2.erode(fg, se, iterations=1)
+    # ring = píxeles del alpha que desaparecen al erosionar
+    boundary_ring = cv2.bitwise_and(fg, cv2.bitwise_not(eroded))
+    # dentro del ring, solo los muy brillantes son fringe de fondo
+    bright = (gray >= bright_thresh).astype(np.uint8) * 255
+    bright_fringe = cv2.bitwise_and(boundary_ring, bright)
+    return cv2.bitwise_and(fg, cv2.bitwise_not(bright_fringe))
 
 
 # ------------------------------------------------------------------ #
@@ -115,6 +158,8 @@ def compute_alpha(
     shrink: int = 1,
     alpha_close: int = 25,
     dark_thresh: int = 180,
+    defringe_width: int = 2,
+    defringe_thresh: int = 220,
 ) -> np.ndarray:
     """Calcula el canal alpha del personaje (dual-path v8).
 
@@ -151,5 +196,8 @@ def compute_alpha(
         se = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * shrink + 1, 2 * shrink + 1))
         fg = cv2.erode(fg, se, iterations=1)
         fg = fill_holes(fg)
+
+    # Defringe: eliminar píxeles muy brillantes en la corona exterior (anti-halo)
+    fg = _defringe_boundary(fg, gray, ring_width=defringe_width, bright_thresh=defringe_thresh)
 
     return fg

@@ -65,6 +65,8 @@ def process_frame(
         shrink=config.alpha_shrink,
         alpha_close=config.alpha_close,
         dark_thresh=config.dark_thresh,
+        defringe_width=config.defringe_width,
+        defringe_thresh=config.defringe_thresh,
     )
 
     # 4. Limpieza de rellenos + cuantización provisional (necesaria para refuerzo de tinta)
