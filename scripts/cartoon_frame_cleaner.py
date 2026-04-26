@@ -478,6 +478,49 @@ def remove_contextual_white_components(tritone, alpha_mask, ink_mask, outer_outl
     return tritone
 
 
+def remove_isolated_white_components(tritone, alpha_mask, min_cluster_area=150, max_remove_area=300, isolation_gap=15):
+    """
+    Hace TRANSPARENTES (alpha_mask=0) los blancos pequeños que estén
+    lejos del cluster principal de blancos (cara/ojos/dientes).
+
+    Algoritmo:
+      1. Detecta todos los componentes blancos dentro del alpha.
+      2. Los grandes (area >= min_cluster_area) forman el "cluster de cara".
+      3. Dilata ese cluster min_cluster_area isolation_gap píxeles.
+      4. Componentes pequeños (area < max_remove_area) que NO se solapen
+         con el cluster dilatado → probables artefactos junto a los bigotes
+         o el cuerpo → se vuelven transparentes.
+    """
+    inside_white = np.logical_and(alpha_mask > 0, tritone == 255).astype(np.uint8) * 255
+    num, labels, stats, _ = cv2.connectedComponentsWithStats(inside_white, 8)
+    if num <= 2:
+        return tritone
+
+    main_mask = np.zeros(tritone.shape, dtype=np.uint8)
+    has_main = False
+    for i in range(1, num):
+        if int(stats[i, cv2.CC_STAT_AREA]) >= min_cluster_area:
+            main_mask[labels == i] = 255
+            has_main = True
+    if not has_main:
+        return tritone
+
+    k = isolation_gap * 2 + 1
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
+    main_dilated = cv2.dilate(main_mask, kernel)
+
+    for i in range(1, num):
+        area = int(stats[i, cv2.CC_STAT_AREA])
+        if area >= min_cluster_area or area >= max_remove_area:
+            continue
+        comp_mask = (labels == i)
+        if np.any(comp_mask & (main_dilated > 0)):
+            continue  # cerca de la cara → conservar
+        alpha_mask[comp_mask] = 0
+
+    return tritone
+
+
 def quantize_with_ink(clean_gray, alpha_mask, ink_mask, dark_gray=72):
     fill_map, thr = provisional_fill_quantization(clean_gray, alpha_mask, dark_gray=dark_gray)
     out = np.full_like(clean_gray, 255)
@@ -676,13 +719,18 @@ def process_one(
         # Todo lo que no sea blanco puro dentro del alpha → negro.
         tritone[np.logical_and(alpha > 0, tritone < 255)] = 0
 
-    # Segunda heurística: convertir a `dark_gray` las islas blancas dentro
-    # del alpha que parecen artefactos (no tocan la tinta ni el outline
-    # y están en la mitad inferior de la silueta). Esto mejora los casos
-    # donde Otsu deja áreas blancas "entre patas".
+    # Segunda heurística: hacer transparentes las islas blancas dentro
+    # del alpha que están en la mitad inferior de la silueta (p.ej. entre patas).
     if not green_screen:
         tritone = remove_contextual_white_components(
             tritone, alpha, ink_final, outer_outline, dark_gray=dark_gray, min_area=6, max_area=20000
+        )
+
+    # Tercera heurística: hacer transparentes los blancos pequeños aislados
+    # del cluster principal de la cara (p.ej. mancha junto a los bigotes).
+    if not green_screen:
+        tritone = remove_isolated_white_components(
+            tritone, alpha, min_cluster_area=150, max_remove_area=300, isolation_gap=15
         )
 
     rgba = rgba_from_quantized(tritone, alpha)
