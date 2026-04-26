@@ -123,3 +123,92 @@ def remove_black_specks(
         if int(stats[i, cv2.CC_STAT_AREA]) < min_area:
             out[labels == i] = dark_gray
     return out
+
+
+def remove_contextual_white_components(
+    tritone: np.ndarray,
+    alpha_mask: np.ndarray,
+    ink_mask: np.ndarray,
+    outer_outline: np.ndarray,
+    dark_gray: int = 72,
+    min_area: int = 6,
+    max_area: int = 20000,
+) -> np.ndarray:
+    """Hace TRANSPARENTES (alpha_mask=0) las islas blancas dentro del alpha
+    que probablemente sean artefactos (p.ej. el hueco entre las patas):
+
+    - no tocan la tinta (ink_mask)
+    - su centroide Y está por debajo del punto medio del bbox vertical del alpha
+    - area entre ``min_area`` y ``max_area``
+
+    Las áreas blancas legítimas (ojos, dientes) están en la mitad superior
+    del personaje y no resultan afectadas.
+    """
+    inside_white = np.logical_and(alpha_mask > 0, tritone == 255).astype(np.uint8) * 255
+    num, labels, stats, centroids = cv2.connectedComponentsWithStats(inside_white, 8)
+
+    ys, xs = np.where(alpha_mask > 0)
+    if ys.size == 0:
+        return tritone
+    alpha_y_mid = (float(ys.min()) + float(ys.max())) / 2.0
+
+    for i in range(1, num):
+        area = int(stats[i, cv2.CC_STAT_AREA])
+        if area < min_area or area > max_area:
+            continue
+        cy = float(centroids[i][1])
+        comp_mask = labels == i
+        if np.any(np.logical_and(comp_mask, ink_mask > 0)):
+            continue
+        if cy > alpha_y_mid:
+            alpha_mask[comp_mask] = 0
+
+    return tritone
+
+
+def remove_isolated_white_components(
+    tritone: np.ndarray,
+    alpha_mask: np.ndarray,
+    min_cluster_area: int = 150,
+    max_remove_area: int = 300,
+    isolation_gap: int = 15,
+) -> np.ndarray:
+    """Hace TRANSPARENTES (alpha_mask=0) los blancos pequeños que estén lejos
+    del cluster principal de blancos (cara/ojos/dientes).
+
+    Algoritmo:
+      1. Detecta todos los componentes blancos dentro del alpha.
+      2. Los grandes (area >= ``min_cluster_area``) forman el "cluster de cara".
+      3. Dilata ese cluster ``isolation_gap`` píxeles.
+      4. Componentes pequeños (area < ``max_remove_area``) que NO se solapen
+         con el cluster dilatado → probables artefactos junto a bigotes o
+         cuerpo → se vuelven transparentes.
+    """
+    inside_white = np.logical_and(alpha_mask > 0, tritone == 255).astype(np.uint8) * 255
+    num, labels, stats, _ = cv2.connectedComponentsWithStats(inside_white, 8)
+    if num <= 2:
+        return tritone
+
+    main_mask = np.zeros(tritone.shape, dtype=np.uint8)
+    has_main = False
+    for i in range(1, num):
+        if int(stats[i, cv2.CC_STAT_AREA]) >= min_cluster_area:
+            main_mask[labels == i] = 255
+            has_main = True
+    if not has_main:
+        return tritone
+
+    k = isolation_gap * 2 + 1
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
+    main_dilated = cv2.dilate(main_mask, kernel)
+
+    for i in range(1, num):
+        area = int(stats[i, cv2.CC_STAT_AREA])
+        if area >= min_cluster_area or area >= max_remove_area:
+            continue
+        comp_mask = labels == i
+        if np.any(comp_mask & (main_dilated > 0)):
+            continue
+        alpha_mask[comp_mask] = 0
+
+    return tritone

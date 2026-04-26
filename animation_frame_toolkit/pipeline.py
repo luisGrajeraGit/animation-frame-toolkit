@@ -11,13 +11,21 @@ from pathlib import Path
 from typing import List, Optional
 
 import cv2
+import numpy as np
 
 from .alpha import compute_alpha
 from .compositing import build_tritone, to_rgba
 from .config import ProcessConfig
 from .debug import save_debug_frames
 from .fill import clean_fills, quantize_fills
-from .ink import reinforce_line_mask, remove_black_specks, remove_white_specks, silhouette_outline
+from .ink import (
+    reinforce_line_mask,
+    remove_black_specks,
+    remove_contextual_white_components,
+    remove_isolated_white_components,
+    remove_white_specks,
+    silhouette_outline,
+)
 from .io import read_image, write_image
 from .line_detection import initial_line_mask
 from .preprocessing import ensure_gray, normalize_background
@@ -92,6 +100,28 @@ def process_frame(
     tritone, _, _ = build_tritone(clean, alpha, ink_final, dark_gray=config.dark_gray)
     tritone = remove_white_specks(tritone, alpha, dark_gray=config.dark_gray, min_area=config.white_speck_area)
     tritone = remove_black_specks(tritone, alpha, dark_gray=config.dark_gray, min_area=config.black_speck_area)
+
+    # Heurística 1: componentes blancos pequeños pegados al borde inferior
+    h_img = tritone.shape[0]
+    bottom_margin = max(40, h_img // 10)
+    white_inside = (tritone == 255).astype(np.uint8)
+    _n, _lbl, _st, _ = cv2.connectedComponentsWithStats(white_inside, 8)
+    for _i in range(1, _n):
+        _x, _y, _w, _h, _area = _st[_i]
+        if (_y + _h > h_img - bottom_margin) and (10 <= _area < 2000):
+            alpha[_lbl == _i] = 0
+
+    # Heurística 2: islas blancas en mitad inferior del bbox del alpha
+    tritone = remove_contextual_white_components(
+        tritone, alpha, ink_final, outer_outline,
+        dark_gray=config.dark_gray, min_area=6, max_area=20000,
+    )
+
+    # Heurística 3: blancos pequeños aislados del cluster principal (cara)
+    tritone = remove_isolated_white_components(
+        tritone, alpha, min_cluster_area=150, max_remove_area=300, isolation_gap=15,
+    )
+
     rgba = to_rgba(tritone, alpha)
     write_image(Path(output_path), rgba)
 
