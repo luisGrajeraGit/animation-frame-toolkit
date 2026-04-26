@@ -244,6 +244,13 @@ def compute_alpha_from_gray(
     # --- Vía 1: flood-fill desde el borde ---
     fg_flood = _flood_fill_alpha(gray, barrier, bg_lo, bg_hi)
 
+    # Detectar huecos legítimos que ya existen en el resultado por
+    # flood-fill (fondos interiores entre patas). Queremos preservarlos
+    # y evitar que las operaciones posteriores (cierre morfológico o
+    # filling) los tapen. `holes_from_flood` marca esos huecos.
+    flood_filled = fill_holes(fg_flood)
+    holes_from_flood = cv2.bitwise_and(flood_filled, cv2.bitwise_not(fg_flood))
+
     # --- Vía 2: silueta oscura con cierre grande ---
     if alpha_close > 0:
         dark_sil = _dark_silhouette_alpha(gray, alpha_close, dark_thresh)
@@ -255,18 +262,26 @@ def compute_alpha_from_gray(
         fg_expanded = cv2.dilate(fg_flood, se_margin, iterations=1)
         dark_sil_restricted = cv2.bitwise_and(dark_sil, fg_expanded)
 
-        # Combinar: unión de ambas vías
+        # Evitar que la silueta oscura rellene huecos legítimos detectados
+        # por el flood-fill (p.ej. separaciones entre patas).
+        dark_sil_restricted = cv2.bitwise_and(dark_sil_restricted, cv2.bitwise_not(holes_from_flood))
+
+        # Combinar: unión de ambas vías, pero NO rellenar globalmente los
+        # huecos aquí (los preservaremos más abajo si es necesario).
         fg = cv2.bitwise_or(fg_flood, dark_sil_restricted)
-        fg = fill_holes(fg)
         fg = area_filter(fg, min_area=64, keep_larger=True)
-        fg = fill_holes(fg)
     else:
         fg = fg_flood
 
     # --- Limpieza de píxeles blancos fugados del fondo ---
     fg = _remove_white_border_leakage(fg, gray, bg_lo=bg_lo)
     fg = area_filter(fg, min_area=64, keep_larger=True)
+
+    # Rellenar huecos grandes creados por la combinación, pero asegurarnos
+    # de no volver a tapar los huecos legítimos detectados originalmente
+    # por el flood-fill.
     fg = fill_holes(fg)
+    fg = cv2.bitwise_and(fg, cv2.bitwise_not(holes_from_flood))
 
     # --- Erosión suave para afinar el borde ---
     if shrink > 0:
@@ -423,6 +438,46 @@ def remove_tiny_black_specks(tritone, alpha_mask, dark_gray=72, min_area=3):
     return out
 
 
+def remove_contextual_white_components(tritone, alpha_mask, ink_mask, outer_outline, dark_gray=72, min_area=6, max_area=20000):
+    """
+    Hace TRANSPARENTES (alpha_mask=0) las islas blancas dentro del alpha
+    que probablemente sean artefactos (p.ej. el hueco entre las patas):
+    - no tocan la tinta (ink_mask)
+    - su centroide Y está por debajo del punto medio del bbox vertical
+      del alpha (más robusto que el centroide de masa cuando el personaje
+      ocupa la parte inferior del encuadre)
+    - area entre `min_area` y `max_area`
+
+    Las áreas blancas legítimas (ojos, dientes) están en la mitad superior
+    del personaje y no resultan afectadas.
+    """
+    inside_white = np.logical_and(alpha_mask > 0, tritone == 255).astype(np.uint8) * 255
+    num, labels, stats, centroids = cv2.connectedComponentsWithStats(inside_white, 8)
+
+    ys, xs = np.where(alpha_mask > 0)
+    if ys.size == 0:
+        return tritone
+    # Punto medio del bbox vertical del alpha (no centroide de masa)
+    alpha_y_mid = (float(ys.min()) + float(ys.max())) / 2.0
+
+    for i in range(1, num):
+        area = int(stats[i, cv2.CC_STAT_AREA])
+        if area < min_area or area > max_area:
+            continue
+        cy = float(centroids[i][1])
+        comp_mask = (labels == i)
+
+        # Si toca la tinta lo dejamos (podría ser parte del diseño)
+        if np.any(np.logical_and(comp_mask, ink_mask > 0)):
+            continue
+
+        # Si está en la mitad inferior del personaje → artefacto → transparente
+        if cy > alpha_y_mid:
+            alpha_mask[comp_mask] = 0
+
+    return tritone
+
+
 def quantize_with_ink(clean_gray, alpha_mask, ink_mask, dark_gray=72):
     fill_map, thr = provisional_fill_quantization(clean_gray, alpha_mask, dark_gray=dark_gray)
     out = np.full_like(clean_gray, 255)
@@ -438,6 +493,42 @@ def rgba_from_quantized(tritone, alpha):
     rgba[..., 2] = tritone
     rgba[..., 3] = alpha
     return rgba
+
+
+# ---------------------------------------------------------------------------
+# Alpha computation — green screen (chroma key)
+# ---------------------------------------------------------------------------
+
+
+def compute_alpha_greenscreen(bgr, hue_lo=35, hue_hi=85, sat_min=80, val_min=50, shrink=1):
+    """
+    Calcula el canal alpha eliminando el fondo verde por croma (HSV).
+
+    Parámetros:
+      hue_lo / hue_hi  — rango de tono verde en escala OpenCV (0-180).
+                         Verde puro ≈ 60; el defecto [35, 85] cubre todo el
+                         espectro verde típico de chroma key.
+      sat_min          — saturación mínima para considerar un píxel verde.
+      val_min          — brillo mínimo para considerar un píxel verde.
+      shrink           — píxeles de erosión para eliminar fleco verde en el borde.
+    """
+    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+    h, s, v = hsv[:, :, 0], hsv[:, :, 1], hsv[:, :, 2]
+
+    green_mask = ((h >= hue_lo) & (h <= hue_hi) & (s >= sat_min) & (v >= val_min)).astype(np.uint8) * 255
+
+    fg = cv2.bitwise_not(green_mask)
+    fg = area_filter(fg, min_area=64, keep_larger=True)
+    # NO fill_holes: los huecos entre las patas son verde legítimo (transparente)
+
+    if shrink > 0:
+        fg = cv2.erode(
+            fg,
+            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * shrink + 1, 2 * shrink + 1)),
+            iterations=1,
+        )
+
+    return fg
 
 
 def process_one(
@@ -457,11 +548,45 @@ def process_one(
     outline_thickness=2,
     white_speck_area=8,
     black_speck_area=3,
+    green_screen=False,
+    gs_hue_lo=35,
+    gs_hue_hi=85,
+    gs_sat_min=80,
+    gs_val_min=50,
+    gs_fill_thresh=200,
 ):
     img = cv2.imread(str(input_path), cv2.IMREAD_UNCHANGED)
     if img is None:
         raise RuntimeError(f"Could not read {input_path}")
-    gray = ensure_gray(img)
+
+    if green_screen:
+        # --- Modo chroma key ---
+        # Aseguramos tener una imagen BGR (3 canales) para la detección HSV
+        if img.ndim == 2:
+            bgr = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+        elif img.shape[2] == 4:
+            bgr = img[:, :, :3]
+        else:
+            bgr = img
+
+        alpha = compute_alpha_greenscreen(
+            bgr,
+            hue_lo=gs_hue_lo,
+            hue_hi=gs_hue_hi,
+            sat_min=gs_sat_min,
+            val_min=gs_val_min,
+            shrink=alpha_shrink,
+        )
+
+        # Sustituir el fondo verde por blanco en escala de grises para que
+        # el resto del pipeline (detección de líneas, cuantización…) funcione
+        # exactamente igual que con fondo blanco.
+        gray_raw = ensure_gray(bgr)
+        gray_raw = gray_raw.copy()
+        gray_raw[alpha == 0] = 255
+        gray = gray_raw
+    else:
+        gray = ensure_gray(img)
 
     norm = normalize_background(gray)
     mask0, score, local_dark, bh1, bh2 = initial_line_mask0(
@@ -471,18 +596,42 @@ def process_one(
         abs_black=abs_black,
     )
 
-    # Alpha: flood-fill + recuperación por silueta oscura
-    alpha = compute_alpha_from_gray(
-        norm,
-        mask0,
-        bg_lo=bg_lo,
-        bg_hi=bg_hi,
-        shrink=alpha_shrink,
-        alpha_close=alpha_close,
-        dark_thresh=dark_thresh,
-    )
+    if green_screen:
+        # El alpha ya fue calculado por croma; solo lo refinamos con una
+        # pequeña erosión adicional si se pidió (ya aplicada dentro de
+        # compute_alpha_greenscreen). No volvemos a calcular flood-fill.
+        pass
+    else:
+        # Alpha: flood-fill + recuperación por silueta oscura
+        alpha = compute_alpha_from_gray(
+            norm,
+            mask0,
+            bg_lo=bg_lo,
+            bg_hi=bg_hi,
+            shrink=alpha_shrink,
+            alpha_close=alpha_close,
+            dark_thresh=dark_thresh,
+        )
 
-    clean = clean_fills(norm, mask0, alpha, body_smooth=body_smooth)
+    if green_screen:
+        # En modo green screen el cuerpo ya está pintado con colores planos y limpios.
+        # clean_fills usa inpaint sobre la imagen completa (incluyendo el fondo blanco
+        # que sustituimos) y eso hace que la tinta de los huecos interiores del contorno
+        # (p.ej. los dedos) se rellene de blanco por sangrado del borde.
+        # Al ser ya un dibujo digital limpio, no necesitamos ni inpaint ni suavizado.
+        #
+        # Además, los píxeles anti-aliased del borde (mezcla de cuerpo oscuro + verde)
+        # quedan en rango ~80-150 en grises. Otsu los clasifica incorrectamente como
+        # blanco junto al hocico (~255). Los forzamos a dark_gray para que la
+        # cuantización solo marque como blanco las áreas genuinamente brillantes.
+        clean = norm.copy()
+        edge_zone = np.logical_and(
+            alpha > 0,
+            np.logical_and(norm > 50, norm < gs_fill_thresh),
+        )
+        clean[edge_zone] = dark_gray
+    else:
+        clean = clean_fills(norm, mask0, alpha, body_smooth=body_smooth)
 
     fill_map, thr = provisional_fill_quantization(clean, alpha, dark_gray=dark_gray)
 
@@ -504,6 +653,37 @@ def process_one(
     tritone, _, _ = quantize_with_ink(clean, alpha, ink_final, dark_gray=dark_gray)
     tritone = remove_tiny_white_specks(tritone, alpha, dark_gray=dark_gray, min_area=white_speck_area)
     tritone = remove_tiny_black_specks(tritone, alpha, dark_gray=dark_gray, min_area=black_speck_area)
+
+    # Heurística: algunos fotogramas tienen pequeñas regiones "blancas"
+    # dentro del alpha en la zona inferior (entre las patas). Estas son
+    # artefactos de cuantización/inpaint y deben ser transparentes.
+    # Detectamos componentes blancas pequeñas cercanas al borde inferior
+    # y las eliminamos del alpha (conservando la blancura en color si
+    # se desea, la transparencia hace que no se muestre).
+    if not green_screen:
+        h_img = tritone.shape[0]
+        bottom_margin = max(40, h_img // 10)
+        white_inside = (tritone == 255).astype(np.uint8)
+        num, labels, stats, _ = cv2.connectedComponentsWithStats(white_inside, 8)
+        for i in range(1, num):
+            x, y, w_box, h_box, area = stats[i]
+            if (y + h_box > h_img - bottom_margin) and (area >= 10) and (area < 2000):
+                # quitar del alpha (hacer transparente)
+                alpha[labels == i] = 0
+
+    if green_screen:
+        # El cuerpo es negro sólido digital; no existe zona "gris".
+        # Todo lo que no sea blanco puro dentro del alpha → negro.
+        tritone[np.logical_and(alpha > 0, tritone < 255)] = 0
+
+    # Segunda heurística: convertir a `dark_gray` las islas blancas dentro
+    # del alpha que parecen artefactos (no tocan la tinta ni el outline
+    # y están en la mitad inferior de la silueta). Esto mejora los casos
+    # donde Otsu deja áreas blancas "entre patas".
+    if not green_screen:
+        tritone = remove_contextual_white_components(
+            tritone, alpha, ink_final, outer_outline, dark_gray=dark_gray, min_area=6, max_area=20000
+        )
 
     rgba = rgba_from_quantized(tritone, alpha)
     cv2.imwrite(str(output_path), rgba)
@@ -565,6 +745,43 @@ def main():
     ap.add_argument("--outline-thickness", type=int, default=2)
     ap.add_argument("--white-speck-area", type=int, default=8)
     ap.add_argument("--black-speck-area", type=int, default=3)
+    ap.add_argument(
+        "--green-screen",
+        action="store_true",
+        help="Eliminar fondo verde por croma (chroma key HSV) en lugar del método " "de flood-fill para fondo blanco",
+    )
+    ap.add_argument(
+        "--gs-hue-lo",
+        type=int,
+        default=35,
+        help="Tono HSV mínimo del verde (escala OpenCV 0-180, defecto 35)",
+    )
+    ap.add_argument(
+        "--gs-hue-hi",
+        type=int,
+        default=85,
+        help="Tono HSV máximo del verde (escala OpenCV 0-180, defecto 85)",
+    )
+    ap.add_argument(
+        "--gs-sat-min",
+        type=int,
+        default=80,
+        help="Saturación mínima para considerar un píxel verde (0-255, defecto 80)",
+    )
+    ap.add_argument(
+        "--gs-val-min",
+        type=int,
+        default=50,
+        help="Brillo mínimo para considerar un píxel verde (0-255, defecto 50)",
+    )
+    ap.add_argument(
+        "--gs-fill-thresh",
+        type=int,
+        default=200,
+        help="Umbral de brillo para considerar un píxel como relleno blanco en modo "
+        "green screen. Píxeles entre 50 y este valor son forzados a oscuro para "
+        "eliminar el halo anti-aliased del borde (defecto 200)",
+    )
     args = ap.parse_args()
 
     inputs = iter_inputs(args.input, args.glob)
@@ -589,6 +806,12 @@ def main():
             outline_thickness=args.outline_thickness,
             white_speck_area=args.white_speck_area,
             black_speck_area=args.black_speck_area,
+            green_screen=args.green_screen,
+            gs_hue_lo=args.gs_hue_lo,
+            gs_hue_hi=args.gs_hue_hi,
+            gs_sat_min=args.gs_sat_min,
+            gs_val_min=args.gs_val_min,
+            gs_fill_thresh=args.gs_fill_thresh,
         )
     else:
         out_path.mkdir(parents=True, exist_ok=True)
@@ -610,6 +833,12 @@ def main():
                 outline_thickness=args.outline_thickness,
                 white_speck_area=args.white_speck_area,
                 black_speck_area=args.black_speck_area,
+                green_screen=args.green_screen,
+                gs_hue_lo=args.gs_hue_lo,
+                gs_hue_hi=args.gs_hue_hi,
+                gs_sat_min=args.gs_sat_min,
+                gs_val_min=args.gs_val_min,
+                gs_fill_thresh=args.gs_fill_thresh,
             )
 
 
