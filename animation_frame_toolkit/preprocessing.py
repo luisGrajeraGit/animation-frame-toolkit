@@ -13,11 +13,30 @@ import numpy as np
 
 
 def ensure_gray(img: np.ndarray) -> np.ndarray:
-    """Convierte cualquier imagen (BGR, BGRA, gray) a escala de grises."""
+    """Convierte cualquier imagen (BGR, BGRA, gray) a escala de grises.
+
+    Maneja imágenes de 16 bits (uint16) y PNGs con canal alpha pre-keyed:
+    - uint16 → uint8 (divide por 257).
+    - BGRA: compuesta sobre fondo blanco antes de escalar a gris,
+      para que los píxeles transparentes queden en 255 (blanco de fondo).
+    """
+    # --- Normalizar profundidad de bits ---
+    if img.dtype == np.uint16:
+        img = (img.astype(np.float32) / 257.0).clip(0, 255).astype(np.uint8)
+
     if img.ndim == 2:
         return img
+
     if img.shape[2] == 4:
-        return cv2.cvtColor(img, cv2.COLOR_BGRA2GRAY)
+        # Compositar sobre fondo blanco para que la transparencia quede blanca.
+        # Así las imágenes pre-keyed se tratan igual que las de fondo blanco.
+        b, g, r, a = cv2.split(img.astype(np.float32))
+        alpha_f = a / 255.0
+        comp_b = (b * alpha_f + 255.0 * (1.0 - alpha_f)).clip(0, 255).astype(np.uint8)
+        comp_g = (g * alpha_f + 255.0 * (1.0 - alpha_f)).clip(0, 255).astype(np.uint8)
+        comp_r = (r * alpha_f + 255.0 * (1.0 - alpha_f)).clip(0, 255).astype(np.uint8)
+        return cv2.cvtColor(cv2.merge([comp_b, comp_g, comp_r]), cv2.COLOR_BGR2GRAY)
+
     return cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
 
