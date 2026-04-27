@@ -52,7 +52,7 @@ class ProcessConfig:
     """Umbral de luminosidad: píxeles frontera con gris >= este valor se eliminan del alpha."""
 
     # --- Heurísticas de eliminación de blancos artefactuales ---
-    contextual_white_removal: bool = False
+    contextual_white_removal: bool = True
     """Hace transparentes blancos en el 25 % inferior del personaje que no tocan tinta.
     Útil para personajes con fondo blanco que generan artefactos entre las patas (p.ej. gato_03).
     Desactivado por defecto para preservar uñas y otros elementos de borde."""
