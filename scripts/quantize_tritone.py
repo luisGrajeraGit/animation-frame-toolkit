@@ -51,57 +51,33 @@ def _remove_exterior_whites(
     gray: np.ndarray,
     white_thresh: int = 200,
 ) -> np.ndarray:
-    """Elimina blancos exteriores haciendo flood-fill desde las esquinas de la imagen.
+    """Partiendo de todos los píxeles transparentes, expande hacia los vecinos opacos.
+    Si el vecino es blanco → se vuelve transparente.
+    Si el vecino es negro/oscuro (tinta) → se detiene ahí.
+    Los blancos completamente encerrados por tinta (cara, ojos) no son alcanzables
+    y se preservan intactos.
 
-    Lógica:
-      - Los píxeles transparentes (alpha=0) se tratan como blancos en el canvas
-        de flood, conectando el exterior transparente con cualquier hueco abierto
-        en el contorno de tinta (p.ej. entre los dedos/garras).
-      - Se hace flood-fill desde todos los píxeles del borde del frame a través
-        de los píxeles blancos (>=white_thresh).
-      - Todo lo alcanzado = blanco exterior → alpha=0.
-      - Los blancos completamente rodeados de tinta (cara, ojos, bigotes) no son
-        alcanzables desde el borde → se conservan intactos.
-
-    Args:
-        alpha:       Canal alpha uint8 (0=transparente, 255=opaco).
-        gray:        Imagen gris uint8 (tritono cuantizado: 0 / dark_gray / 255).
-        white_thresh: Umbral mínimo para considerar un píxel "blanco".
-
-    Returns:
-        Canal alpha corregido (ndarray uint8).
+    Implementado con componentes conectados (equivalente a BFS pero O(n)):
+    - Se crea una máscara "navegable" = transparente OR blanco-opaco.
+    - Se etiquetan las componentes conectadas de esa máscara.
+    - Cualquier componente que contenga al menos un píxel transparente es exterior.
+    - Los blancos opacos en esas componentes → alpha=0.
     """
-    h, w = alpha.shape
+    navigable = (
+        (alpha == 0) | ((alpha > 128) & (gray >= white_thresh))
+    ).astype(np.uint8)
 
-    # Canvas de flood: los transparentes se tratan como blanco para que los
-    # huecos abiertos en el contorno queden conectados al exterior.
-    canvas = gray.copy()
-    canvas[alpha == 0] = 255
+    _, labels = cv2.connectedComponents(navigable, connectivity=4)
 
-    # Imagen de flood: 0 = blanco (navegable), 255 = barrera (tinta / cuerpo)
-    flood = np.where(canvas >= white_thresh, 0, 255).astype(np.uint8)
-    ffmask = np.zeros((h + 2, w + 2), np.uint8)
+    # Etiquetas que tocan al menos un pixel transparente = exterior
+    exterior_labels = set(int(v) for v in np.unique(labels[alpha == 0]))
 
-    # Sembrar desde todos los píxeles del borde del frame que sean blancos
-    border_seeds = []
-    for y in range(h):
-        if flood[y, 0] == 0:
-            border_seeds.append((0, y))
-        if flood[y, w - 1] == 0:
-            border_seeds.append((w - 1, y))
-    for x in range(w):
-        if flood[0, x] == 0:
-            border_seeds.append((x, 0))
-        if flood[h - 1, x] == 0:
-            border_seeds.append((x, h - 1))
-
-    for x, y in border_seeds:
-        if flood[y, x] == 0:
-            cv2.floodFill(flood, ffmask, (x, y), 128)
-
-    exterior = flood == 128
     alpha_out = alpha.copy()
-    alpha_out[exterior] = 0
+    for lbl in exterior_labels:
+        # Blancos opacos de esa componente → transparentes
+        mask = (labels == lbl) & (alpha > 128) & (gray >= white_thresh)
+        alpha_out[mask] = 0
+
     return alpha_out
 
 
