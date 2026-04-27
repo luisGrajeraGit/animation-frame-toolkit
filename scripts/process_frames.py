@@ -91,6 +91,20 @@ def _build_parser() -> argparse.ArgumentParser:
     param_grp.add_argument("--outline-thickness", type=int, default=None)
     param_grp.add_argument("--white-speck-area", type=int, default=None)
     param_grp.add_argument("--black-speck-area", type=int, default=None)
+    param_grp.add_argument(
+        "--contextual-white-removal",
+        action="store_true",
+        default=None,
+        help="Elimina blancos artefactuales en la zona inferior del personaje "
+        "(útil para personajes con patas sobre fondo blanco, p.ej. gato_03)",
+    )
+    param_grp.add_argument(
+        "--isolated-white-removal",
+        action="store_true",
+        default=None,
+        help="Elimina blancos pequeños aislados del cluster principal de la cara "
+        "(útil para manchas junto a bigotes, p.ej. gato_03)",
+    )
     return ap
 
 
@@ -115,6 +129,8 @@ def _build_config(args: argparse.Namespace) -> ProcessConfig:
         "outline_thickness": args.outline_thickness,
         "white_speck_area": args.white_speck_area,
         "black_speck_area": args.black_speck_area,
+        "contextual_white_removal": args.contextual_white_removal,
+        "isolated_white_removal": args.isolated_white_removal,
     }
     for key, val in cli_overrides.items():
         if val is not None:

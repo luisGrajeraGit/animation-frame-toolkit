@@ -138,11 +138,15 @@ def remove_contextual_white_components(
     que probablemente sean artefactos (p.ej. el hueco entre las patas):
 
     - no tocan la tinta (ink_mask)
-    - su centroide Y está por debajo del punto medio del bbox vertical del alpha
+    - su centroide Y está en el 25 % inferior del bbox vertical del alpha
+      (más robusto que usar el midpoint, que depende de la posición del
+      personaje en el encuadre)
+    - no tocan el borde exterior del alpha dilatado (protege uñas y bordes
+      de diseño que coinciden con el límite de la silueta)
     - area entre ``min_area`` y ``max_area``
 
-    Las áreas blancas legítimas (ojos, dientes) están en la mitad superior
-    del personaje y no resultan afectadas.
+    Las áreas blancas legítimas (cara, ojos, dientes, uñas) no resultan
+    afectadas.
     """
     inside_white = np.logical_and(alpha_mask > 0, tritone == 255).astype(np.uint8) * 255
     num, labels, stats, centroids = cv2.connectedComponentsWithStats(inside_white, 8)
@@ -150,18 +154,33 @@ def remove_contextual_white_components(
     ys, xs = np.where(alpha_mask > 0)
     if ys.size == 0:
         return tritone
-    alpha_y_mid = (float(ys.min()) + float(ys.max())) / 2.0
+
+    alpha_y_min = float(ys.min())
+    alpha_y_max = float(ys.max())
+    # Solo el 25 % inferior del bbox del personaje
+    artifact_y_threshold = alpha_y_min + 0.75 * (alpha_y_max - alpha_y_min)
+
+    # Zona alrededor del borde exterior del alpha → protege uñas/puntas
+    se_border = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+    boundary_zone = cv2.dilate(outer_outline, se_border, iterations=1)
 
     for i in range(1, num):
         area = int(stats[i, cv2.CC_STAT_AREA])
         if area < min_area or area > max_area:
             continue
         cy = float(centroids[i][1])
+        # Solo candidatos en la zona inferior del personaje
+        if cy <= artifact_y_threshold:
+            continue
         comp_mask = labels == i
+        # Toca tinta → diseño legítimo
         if np.any(np.logical_and(comp_mask, ink_mask > 0)):
             continue
-        if cy > alpha_y_mid:
-            alpha_mask[comp_mask] = 0
+        # Toca el borde exterior del alpha → elemento de borde (uñas, punta de cola…)
+        if np.any(comp_mask & (boundary_zone > 0)):
+            continue
+        # Interior blanco en zona inferior sin tinta → artefacto → transparente
+        alpha_mask[comp_mask] = 0
 
     return tritone
 

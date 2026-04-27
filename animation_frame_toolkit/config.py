@@ -34,7 +34,7 @@ class ProcessConfig:
     # --- Alpha (umbralización de fondo) ---
     bg_lo: int = 245
     bg_hi: int = 251
-    alpha_shrink: int = 1
+    alpha_shrink: int = 2
     alpha_close: int = 25
     """Radio (px) del cierre morfológico para recuperar grietas (0 = desactivar)."""
     dark_thresh: int = 180
@@ -46,10 +46,19 @@ class ProcessConfig:
     black_speck_area: int = 3
 
     # --- Defringe (anti-halo y limpieza de bordes blancos) ---
-    defringe_width: int = 2
-    """Anchura en píxeles de la corona exterior del alpha a examinar para defringe."""
+    defringe_width: int = 0
+    """Anchura en píxeles de la corona exterior del alpha a examinar para defringe (0 = desactivado)."""
     defringe_thresh: int = 220
     """Umbral de luminosidad: píxeles frontera con gris >= este valor se eliminan del alpha."""
+
+    # --- Heurísticas de eliminación de blancos artefactuales ---
+    contextual_white_removal: bool = False
+    """Hace transparentes blancos en el 25 % inferior del personaje que no tocan tinta.
+    Útil para personajes con fondo blanco que generan artefactos entre las patas (p.ej. gato_03).
+    Desactivado por defecto para preservar uñas y otros elementos de borde."""
+    isolated_white_removal: bool = False
+    """Hace transparentes blancos pequeños aislados del cluster principal de la cara.
+    Útil para manchas junto a bigotes (p.ej. gato_03). Desactivado por defecto."""
 
     # ------------------------------------------------------------------ #
     # Serialización                                                        #

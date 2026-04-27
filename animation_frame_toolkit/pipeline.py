@@ -101,7 +101,8 @@ def process_frame(
     tritone = remove_white_specks(tritone, alpha, dark_gray=config.dark_gray, min_area=config.white_speck_area)
     tritone = remove_black_specks(tritone, alpha, dark_gray=config.dark_gray, min_area=config.black_speck_area)
 
-    # Heurística 1: componentes blancos pequeños pegados al borde inferior
+    # Heurística 1: componentes blancos pequeños pegados al borde inferior de la IMAGEN
+    # (sólo cuando el personaje ocupa la parte baja del encuadre)
     h_img = tritone.shape[0]
     bottom_margin = max(40, h_img // 10)
     white_inside = (tritone == 255).astype(np.uint8)
@@ -111,16 +112,20 @@ def process_frame(
         if (_y + _h > h_img - bottom_margin) and (10 <= _area < 2000):
             alpha[_lbl == _i] = 0
 
-    # Heurística 2: islas blancas en mitad inferior del bbox del alpha
-    tritone = remove_contextual_white_components(
-        tritone, alpha, ink_final, outer_outline,
-        dark_gray=config.dark_gray, min_area=6, max_area=20000,
-    )
+    # Heurística 2 (opcional): islas blancas en zona inferior del bbox del personaje
+    # Activar cuando el fondo blanco genera artefactos entre las patas (--contextual-white-removal)
+    if config.contextual_white_removal:
+        tritone = remove_contextual_white_components(
+            tritone, alpha, ink_final, outer_outline,
+            dark_gray=config.dark_gray, min_area=6, max_area=20000,
+        )
 
-    # Heurística 3: blancos pequeños aislados del cluster principal (cara)
-    tritone = remove_isolated_white_components(
-        tritone, alpha, min_cluster_area=150, max_remove_area=300, isolation_gap=15,
-    )
+    # Heurística 3 (opcional): blancos pequeños aislados del cluster principal
+    # Activar para manchas junto a bigotes u otros artefactos menores (--isolated-white-removal)
+    if config.isolated_white_removal:
+        tritone = remove_isolated_white_components(
+            tritone, alpha, min_cluster_area=150, max_remove_area=300, isolation_gap=15,
+        )
 
     rgba = to_rgba(tritone, alpha)
     write_image(Path(output_path), rgba)
