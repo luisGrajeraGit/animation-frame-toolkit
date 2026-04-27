@@ -96,6 +96,73 @@ def _remove_white_leakage(alpha: np.ndarray, gray: np.ndarray, white_thresh: int
     return alpha_out
 
 
+def _remove_small_isolated_whites(
+    alpha: np.ndarray,
+    gray: np.ndarray,
+    white_thresh: int = 200,
+    min_cluster_area: int = 150,
+    max_remove_area: int = 400,
+    isolation_gap: int = 12,
+) -> np.ndarray:
+    """Elimina blancos pequeños que no están conectados al cluster blanco principal.
+
+    Lógica:
+      1. Encuentra todos los componentes blancos conectados dentro del alpha.
+      2. Identifica el cluster principal (el más grande, típicamente cara/panza).
+      3. Dilata ese cluster isolation_gap px para definir su "zona de influencia".
+      4. Cualquier componente blanco con área < max_remove_area que NO toca esa zona
+         se hace transparente (son huecos entre dedos/uñas).
+
+    Los blancos grandes (cara, ojos) y los adyacentes al cluster principal
+    nunca se tocan.
+
+    Args:
+        alpha:            Canal alpha uint8.
+        gray:             Imagen gris uint8 (tritono ya cuantizado).
+        white_thresh:     Umbral para considerar píxel "blanco".
+        min_cluster_area: Tamaño mínimo del cluster principal (evita activar en frames vacíos).
+        max_remove_area:  Componentes blancos con área <= esto se eliminan si están aislados.
+        isolation_gap:    Radio de dilatación (px) para definir "próximo al cluster principal".
+
+    Returns:
+        Canal alpha corregido (ndarray uint8).
+    """
+    white_inside = ((alpha > 128) & (gray >= white_thresh)).astype(np.uint8) * 255
+
+    n, labels, stats, _ = cv2.connectedComponentsWithStats(white_inside, 8)
+    if n <= 1:
+        return alpha
+
+    # Encontrar el cluster más grande (componente principal: cara/panza)
+    areas = stats[1:, cv2.CC_STAT_AREA]  # ignorar fondo (comp 0)
+    largest_idx = int(np.argmax(areas)) + 1  # +1 porque saltamos el fondo
+
+    if stats[largest_idx, cv2.CC_STAT_AREA] < min_cluster_area:
+        return alpha  # frame demasiado vacío, no actuar
+
+    # Dilatación del cluster principal para definir zona de influencia
+    main_mask = (labels == largest_idx).astype(np.uint8) * 255
+    se = cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE, (2 * isolation_gap + 1, 2 * isolation_gap + 1)
+    )
+    main_dilated = cv2.dilate(main_mask, se, iterations=1)
+
+    alpha_out = alpha.copy()
+    for i in range(1, n):
+        if i == largest_idx:
+            continue
+        area = stats[i, cv2.CC_STAT_AREA]
+        if area > max_remove_area:
+            continue  # blanco grande (ojo, diente largo…): conservar
+        comp_mask = (labels == i).astype(np.uint8) * 255
+        if cv2.bitwise_and(comp_mask, main_dilated).any():
+            continue  # toca el cluster principal: conservar (uñas conectadas)
+        # Blanco pequeño aislado → transparente
+        alpha_out[comp_mask > 0] = 0
+
+    return alpha_out
+
+
 def quantize_frame(
     input_path: "str | Path",
     output_path: "str | Path",
@@ -165,8 +232,11 @@ def quantize_frame(
     out_rgba = cv2.cvtColor(out_bgr, cv2.COLOR_BGR2BGRA)
     out_rgba[:, :, 3] = alpha  # conservar alpha original
 
-    # Eliminar blancos que filtran hacia el exterior transparente
+    # Eliminar blancos que filtran hacia el exterior transparente (flood-fill)
     out_rgba[:, :, 3] = _remove_white_leakage(out_rgba[:, :, 3], out_gray)
+
+    # Eliminar blancos pequeños aislados del cluster principal (huecos entre dedos/uñas)
+    out_rgba[:, :, 3] = _remove_small_isolated_whites(out_rgba[:, :, 3], out_gray)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     cv2.imwrite(str(output_path), out_rgba)
