@@ -96,68 +96,108 @@ def _remove_white_leakage(alpha: np.ndarray, gray: np.ndarray, white_thresh: int
     return alpha_out
 
 
-def _remove_small_isolated_whites(
+def _seal_white_edges(
     alpha: np.ndarray,
     gray: np.ndarray,
     white_thresh: int = 200,
-    min_cluster_area: int = 150,
-    max_remove_area: int = 400,
-    isolation_gap: int = 12,
 ) -> np.ndarray:
-    """Elimina blancos pequeños que no están conectados al cluster blanco principal.
+    """Convierte en tinta negra (0) los píxeles blancos colindantes con transparencia.
 
-    Lógica:
-      1. Encuentra todos los componentes blancos conectados dentro del alpha.
-      2. Identifica el cluster principal (el más grande, típicamente cara/panza).
-      3. Dilata ese cluster isolation_gap px para definir su "zona de influencia".
-      4. Cualquier componente blanco con área < max_remove_area que NO toca esa zona
-         se hace transparente (son huecos entre dedos/uñas).
-
-    Los blancos grandes (cara, ojos) y los adyacentes al cluster principal
-    nunca se tocan.
+    El contorno del personaje debe ser siempre tinta. Cualquier píxel blanco
+    opaco que toca directamente la zona transparente se convierte en negro (0).
+    Los blancos interiores legítimos (cara, panza, ojos) están completamente
+    rodeados de tinta y no tocan la transparencia exterior.
 
     Args:
-        alpha:            Canal alpha uint8.
-        gray:             Imagen gris uint8 (tritono ya cuantizado).
-        white_thresh:     Umbral para considerar píxel "blanco".
-        min_cluster_area: Tamaño mínimo del cluster principal (evita activar en frames vacíos).
-        max_remove_area:  Componentes blancos con área <= esto se eliminan si están aislados.
-        isolation_gap:    Radio de dilatación (px) para definir "próximo al cluster principal".
+        alpha:       Canal alpha uint8 (0 = transparente, 255 = opaco).
+        gray:        Imagen gris uint8 (tritono cuantizado).
+        white_thresh: Umbral mínimo para considerar un píxel "blanco".
+
+    Returns:
+        Imagen gris corregida (ndarray uint8).
+    """
+    transparent = (alpha == 0).astype(np.uint8) * 255
+    # Dilatar 1 px la zona transparente → vecinos directos (4-conectividad)
+    se = cv2.getStructuringElement(cv2.MORPH_CROSS, (3, 3))
+    adj_to_transparent = cv2.dilate(transparent, se, iterations=1)
+
+    # Blancos opacos adyacentes a transparencia → convertir a tinta negra
+    white_opaque = ((alpha > 128) & (gray >= white_thresh)).astype(np.uint8) * 255
+    edge_whites = cv2.bitwise_and(white_opaque, adj_to_transparent)
+
+    gray_out = gray.copy()
+    gray_out[edge_whites > 0] = 0
+    return gray_out
+
+
+def _remove_lower_zone_whites(
+    alpha: np.ndarray,
+    gray: np.ndarray,
+    white_thresh: int = 200,
+    upper_fraction: float = 0.50,
+    max_remove_area: int = 8000,
+) -> np.ndarray:
+    """Elimina blancos opacos en la mitad inferior del personaje que no tocan
+    ningún blanco de la mitad superior (cara/panza legítima).
+
+    Problema que resuelve: huecos entre dedos/uñas encerrados por tinta que el
+    flood-fill no alcanza desde el exterior. Estos huecos quedan en la parte
+    baja del personaje y no tienen continuidad con los blancos de la cara.
+
+    Lógica:
+      1. Calcula la bbox vertical del personaje usando el canal alpha.
+      2. Define "zona superior" como la mitad superior de esa bbox.
+      3. Construye una máscara de todos los blancos en la zona superior y la dilata.
+      4. Cualquier componente blanco cuyo centroide está en la mitad inferior
+         Y que no toca la máscara superior dilatada → se hace transparente.
+
+    Args:
+        alpha:          Canal alpha uint8.
+        gray:           Imagen gris uint8 (tritono cuantizado).
+        white_thresh:   Umbral para considerar un píxel "blanco".
+        upper_fraction: Fracción superior del bbox del personaje que se considera "cara".
+        max_remove_area: Componentes con área mayor a esto se conservan (por si acaso).
 
     Returns:
         Canal alpha corregido (ndarray uint8).
     """
-    white_inside = ((alpha > 128) & (gray >= white_thresh)).astype(np.uint8) * 255
-
-    n, labels, stats, _ = cv2.connectedComponentsWithStats(white_inside, 8)
-    if n <= 1:
+    opaque_rows = np.where((alpha > 128).any(axis=1))[0]
+    if opaque_rows.size == 0:
         return alpha
 
-    # Encontrar el cluster más grande (componente principal: cara/panza)
-    areas = stats[1:, cv2.CC_STAT_AREA]  # ignorar fondo (comp 0)
-    largest_idx = int(np.argmax(areas)) + 1  # +1 porque saltamos el fondo
+    char_top = int(opaque_rows[0])
+    char_bot = int(opaque_rows[-1])
+    char_h = char_bot - char_top
+    if char_h < 20:
+        return alpha  # personaje demasiado pequeño
 
-    if stats[largest_idx, cv2.CC_STAT_AREA] < min_cluster_area:
-        return alpha  # frame demasiado vacío, no actuar
+    upper_bottom = char_top + int(char_h * upper_fraction)
 
-    # Dilatación del cluster principal para definir zona de influencia
-    main_mask = (labels == largest_idx).astype(np.uint8) * 255
-    se = cv2.getStructuringElement(
-        cv2.MORPH_ELLIPSE, (2 * isolation_gap + 1, 2 * isolation_gap + 1)
-    )
-    main_dilated = cv2.dilate(main_mask, se, iterations=1)
+    white_inside = ((alpha > 128) & (gray >= white_thresh)).astype(np.uint8) * 255
+
+    # Máscara de blancos en la zona superior → referencia "legítima"
+    upper_white = white_inside.copy()
+    upper_white[upper_bottom:, :] = 0  # tapar la zona inferior
+    se_dil = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (25, 25))
+    upper_white_dil = cv2.dilate(upper_white, se_dil, iterations=1)
+
+    n, labels, stats, centroids = cv2.connectedComponentsWithStats(white_inside, 8)
 
     alpha_out = alpha.copy()
     for i in range(1, n):
-        if i == largest_idx:
-            continue
+        cy = centroids[i][1]  # coordenada Y del centroide
+        if cy <= upper_bottom:
+            continue  # centroide en la zona superior → conservar
+
         area = stats[i, cv2.CC_STAT_AREA]
         if area > max_remove_area:
-            continue  # blanco grande (ojo, diente largo…): conservar
+            continue  # demasiado grande para eliminar con seguridad
+
         comp_mask = (labels == i).astype(np.uint8) * 255
-        if cv2.bitwise_and(comp_mask, main_dilated).any():
-            continue  # toca el cluster principal: conservar (uñas conectadas)
-        # Blanco pequeño aislado → transparente
+        if cv2.bitwise_and(comp_mask, upper_white_dil).any():
+            continue  # toca la zona superior → conservar (uñas conectadas a panza)
+
+        # Blanco en zona inferior sin conexión a la zona superior → transparente
         alpha_out[comp_mask > 0] = 0
 
     return alpha_out
@@ -232,11 +272,18 @@ def quantize_frame(
     out_rgba = cv2.cvtColor(out_bgr, cv2.COLOR_BGR2BGRA)
     out_rgba[:, :, 3] = alpha  # conservar alpha original
 
+    # Sellar blancos en el borde del personaje → convertir a tinta negra
+    out_gray = _seal_white_edges(out_rgba[:, :, 3], out_gray)
+
     # Eliminar blancos que filtran hacia el exterior transparente (flood-fill)
     out_rgba[:, :, 3] = _remove_white_leakage(out_rgba[:, :, 3], out_gray)
 
-    # Eliminar blancos pequeños aislados del cluster principal (huecos entre dedos/uñas)
-    out_rgba[:, :, 3] = _remove_small_isolated_whites(out_rgba[:, :, 3], out_gray)
+    # Eliminar blancos en la zona inferior del personaje desconectados de la cara
+    out_rgba[:, :, 3] = _remove_lower_zone_whites(out_rgba[:, :, 3], out_gray)
+
+    # Propagar correcciones de color al output RGBA
+    out_bgr = cv2.cvtColor(out_gray, cv2.COLOR_GRAY2BGR)
+    out_rgba[:, :, :3] = out_bgr
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     cv2.imwrite(str(output_path), out_rgba)
