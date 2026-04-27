@@ -46,6 +46,56 @@ def _otsu_threshold(values: np.ndarray) -> int:
     return int(thr)
 
 
+def _remove_white_leakage(alpha: np.ndarray, gray: np.ndarray, white_thresh: int = 200) -> np.ndarray:
+    """Hace transparentes los píxeles blancos dentro del alpha que tocan el exterior transparente.
+
+    Los blancos interiores cerrados (cara, ojos, dientes) quedan intactos porque
+    están rodeados de tinta negra y no son alcanzables por flood-fill desde el borde.
+
+    Args:
+        alpha:        Canal alpha 8-bit (0 = transparente, 255 = opaco).
+        gray:         Imagen en escala de grises 8-bit con los mismos valores que el tritono.
+        white_thresh: Valor mínimo de gris para considerar un píxel "blanco".
+
+    Returns:
+        Canal alpha corregido (ndarray uint8).
+    """
+    h, w = alpha.shape
+    white_inside = ((alpha > 128) & (gray >= white_thresh)).astype(np.uint8) * 255
+
+    # Imagen de flood: 0 donde hay blanco interior (caminable), 255 en el resto
+    flood = np.where(white_inside > 0, 0, 255).astype(np.uint8)
+    ffmask = np.zeros((h + 2, w + 2), np.uint8)
+
+    # Semilla 1: blancos interiores adyacentes al exterior del alpha
+    exterior = (alpha == 0).astype(np.uint8) * 255
+    ext_dil = cv2.dilate(
+        exterior,
+        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)),
+        iterations=1,
+    )
+    seeds_alpha = cv2.bitwise_and(white_inside, ext_dil)
+
+    # Semilla 2: blancos en el borde del frame (personaje que sale por el encuadre)
+    border_mask = np.zeros((h, w), np.uint8)
+    border_mask[0, :] = 255
+    border_mask[-1, :] = 255
+    border_mask[:, 0] = 255
+    border_mask[:, -1] = 255
+    seeds_border = cv2.bitwise_and(white_inside, border_mask)
+
+    all_seeds = cv2.bitwise_or(seeds_alpha, seeds_border)
+    ys, xs = np.where(all_seeds > 0)
+    for y, x in zip(ys, xs):
+        if flood[y, x] == 0:
+            cv2.floodFill(flood, ffmask, (int(x), int(y)), 128)
+
+    leaked = (flood == 128).astype(np.uint8)
+    alpha_out = alpha.copy()
+    alpha_out[leaked > 0] = 0
+    return alpha_out
+
+
 def quantize_frame(
     input_path: "str | Path",
     output_path: "str | Path",
@@ -114,6 +164,9 @@ def quantize_frame(
     out_bgr = cv2.cvtColor(out_gray, cv2.COLOR_GRAY2BGR)
     out_rgba = cv2.cvtColor(out_bgr, cv2.COLOR_BGR2BGRA)
     out_rgba[:, :, 3] = alpha  # conservar alpha original
+
+    # Eliminar blancos que filtran hacia el exterior transparente
+    out_rgba[:, :, 3] = _remove_white_leakage(out_rgba[:, :, 3], out_gray)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     cv2.imwrite(str(output_path), out_rgba)
